@@ -16,10 +16,11 @@ It's designed with performance in mind, offering both thread-safe and immutable 
 - **High Performance**: Optimized for concurrent access patterns
 - **Middleware Support**: Both typed and generic middleware for cross-cutting concerns
 - **Factory System**: Create typed values from raw data (JSON, etc.) using registered factories
+- **Serialization**: Convert typed values back into a wire-format `(name, []byte)` pair via registered codecs
 - **Multiple Registry Types**:
-    - `Registry`: Thread-safe composite registry (dispatch + factory)
+    - `Registry`: Thread-safe composite registry (dispatch + factory + serializer)
     - `SealedRegistry`: Immutable composite with zero mutex overhead
-    - `DispatchRegistry` / `FactoryRegistry`: Specialized single-purpose registries
+    - `DispatchRegistry` / `FactoryRegistry` / `SerializerRegistry`: Specialized single-purpose registries
 
 ## Installation
 
@@ -240,6 +241,69 @@ const UserCreatedEvent EventType = 1
 typemux.RegisterFactory(reg, UserCreatedEvent, typemux.JSONFactory[UserCreated]())
 ```
 
+### Serialization (Round-Trip Codecs)
+
+For round-trip use cases — receiving an event on the wire, dispatching it,
+then later emitting an event back — use `RegisterCodec` to register both the
+factory (read side) and the serializer (write side) in one call. `Serialize`
+then turns a typed value back into `(name, []byte)`:
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+
+	"github.com/struct0x/typemux"
+)
+
+type UserCreated struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+func main() {
+	reg := typemux.NewRegistry()
+
+	// One call registers both the factory and the serializer
+	typemux.RegisterCodec(reg, "user_created", typemux.JSONCodec[UserCreated]())
+
+	sealed := reg.Seal()
+
+	// Read side: bytes -> typed value (via CreateType)
+	jsonData := []byte(`{"id": 1, "name": "Alice"}`)
+	value, err := typemux.CreateType(sealed, "user_created", jsonData)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Write side: typed value -> (name, bytes)
+	name, data, err := typemux.Serialize[string](sealed, value.(UserCreated))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s -> %s\n", name, data)
+}
+```
+
+`Serialize`'s `KEY` type parameter matches the type used at registration. With
+a custom comparable key:
+
+```go
+type EventKind int
+const UserCreatedEvent EventKind = 1
+
+typemux.RegisterCodec(reg, UserCreatedEvent, typemux.JSONCodec[UserCreated]())
+name, data, _ := typemux.Serialize[EventKind](reg, UserCreated{ID: 1, Name: "Alice"})
+// name == UserCreatedEvent
+```
+
+If the requested `KEY` type doesn't match the registered key, `Serialize`
+returns `ErrKeyTypeMismatch`. If no codec is registered for the value's type,
+it returns `ErrSerializerNotFound`. Pointer-to-value lookup falls back to the
+value's type, matching the dispatcher's behavior.
+
 ## Performance
 
 Typemux is optimized for high-performance scenarios:
@@ -283,12 +347,14 @@ go test -bench=. -benchmem
 
 | Type | Description |
 |------|-------------|
-| `Registry` | Thread-safe composite registry (dispatch + factory) |
+| `Registry` | Thread-safe composite registry (dispatch + factory + serializer) |
 | `SealedRegistry` | Immutable composite registry with zero mutex overhead |
 | `DispatchRegistry` | Thread-safe registry for dispatch handlers only |
 | `SealedDispatchRegistry` | Immutable dispatch-only registry |
 | `FactoryRegistry` | Thread-safe registry for factories only |
 | `SealedFactoryRegistry` | Immutable factory-only registry |
+| `SerializerRegistry` | Thread-safe registry for serializers only |
+| `SealedSerializerRegistry` | Immutable serializer-only registry |
 
 ### Handler & Middleware Types
 
@@ -301,9 +367,10 @@ go test -bench=. -benchmem
 ### Functions
 
 **Registry Creation:**
-- `NewRegistry()` - Creates a composite registry (dispatch + factory)
+- `NewRegistry()` - Creates a composite registry (dispatch + factory + serializer)
 - `NewDispatchRegistry()` - Creates a dispatch-only registry
 - `NewFactoryRegistry()` - Creates a factory-only registry
+- `NewSerializerRegistry()` - Creates a serializer-only registry
 
 **Dispatch:**
 - `RegisterDispatch[T](reg, handler, middleware...)` - Registers a handler for type T
@@ -316,6 +383,12 @@ go test -bench=. -benchmem
 - `CreateType[KEY, DATA](reg, key, data)` - Creates a typed value using a registered factory
 - `JSONFactory[T]()` - Returns a factory that unmarshals JSON into type T
 
+**Serialization:**
+- `RegisterCodec[KEY, T](reg, key, codec)` - Registers both factory and serializer for type T
+- `Serialize[KEY](reg, value)` - Returns the registered key and marshaled bytes for a typed value
+- `JSONCodec[T]()` - Returns a `Codec[T]` backed by `encoding/json`
+- `Codec[T]` - A marshal/unmarshal pair for type T
+
 **Sealing:**
 - `registry.Seal()` - Returns an immutable sealed copy of the registry
 
@@ -326,6 +399,8 @@ go test -bench=. -benchmem
 | `ErrHandlerNotFound` | No handler registered for the dispatched value's type |
 | `ErrFactoryNotFound` | No factory registered for the given key |
 | `ErrDataTypeNotSupported` | Data type doesn't match the factory's expected input type |
+| `ErrSerializerNotFound` | No serializer registered for the value's type |
+| `ErrKeyTypeMismatch` | `Serialize[KEY]` was called with a KEY type that doesn't match the registered key |
 
 ### Pointer/Value Dispatch
 

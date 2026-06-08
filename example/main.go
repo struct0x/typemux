@@ -37,18 +37,33 @@ func main() {
 	// Create and configure the registry
 	reg := typemux.NewRegistry()
 
-	// Register factories for each event type
-	typemux.RegisterFactory(reg, "user_created", typemux.JSONFactory[UserCreated]())
+	// Register codecs (both factory and serializer) plus dispatch handler for each event type
+	typemux.RegisterCodec(reg, "user_created", typemux.JSONCodec[UserCreated]())
 	typemux.RegisterDispatch(reg, h.handleUserCreated)
 
-	typemux.RegisterFactory(reg, "order_placed", typemux.JSONFactory[OrderPlaced]())
+	typemux.RegisterCodec(reg, "order_placed", typemux.JSONCodec[OrderPlaced]())
 	typemux.RegisterDispatch(reg, h.handleOrderPlaced)
 
-	typemux.RegisterFactory(reg, "payment_received", typemux.JSONFactory[PaymentReceived]())
+	typemux.RegisterCodec(reg, "payment_received", typemux.JSONCodec[PaymentReceived]())
 	typemux.RegisterDispatch(reg, h.handlePaymentReceived)
 
 	// Seal the registry for production use
 	sealed := reg.Seal()
+
+	// Demonstrate Serialize: emit an event back out as (name, []byte)
+	name, payload, err := typemux.Serialize[string, []byte](sealed, UserCreated{
+		ID:    "u1",
+		Name:  "Alice",
+		Email: "alice@example.com",
+	})
+	if err != nil {
+		log.Fatalf("Serialize failed: %v", err)
+	}
+	envelope, _ := json.Marshal(struct {
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
+	}{Type: name, Data: payload})
+	log.Printf("Emitted envelope: %s", envelope)
 
 	// Create HTTP handler
 	http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {

@@ -63,18 +63,20 @@ func (s *SealedDispatchRegistry) call(typ reflect.Type, ctx context.Context, v a
 	return call(typ, ctx, v, s.h)
 }
 
-// Registry is a composite registry that supports both handlers and factories.
+// Registry is a composite registry that supports handlers, factories, and serializers.
 // Use NewRegistry() to create one.
 type Registry struct {
 	*DispatchRegistry
 	*FactoryRegistry
+	*SerializerRegistry
 }
 
-// NewRegistry creates a new composite Registry with both handler and factory support.
+// NewRegistry creates a new composite Registry with handler, factory, and serializer support.
 func NewRegistry() *Registry {
 	return &Registry{
-		DispatchRegistry: NewDispatchRegistry(),
-		FactoryRegistry:  NewFactoryRegistry(),
+		DispatchRegistry:   NewDispatchRegistry(),
+		FactoryRegistry:    NewFactoryRegistry(),
+		SerializerRegistry: NewSerializerRegistry(),
 	}
 }
 
@@ -84,8 +86,9 @@ func NewRegistry() *Registry {
 // with no mutex overhead.
 func (r *Registry) Seal() *SealedRegistry {
 	return &SealedRegistry{
-		SealedDispatchRegistry: r.DispatchRegistry.Seal(),
-		SealedFactoryRegistry:  r.FactoryRegistry.Seal(),
+		SealedDispatchRegistry:   r.DispatchRegistry.Seal(),
+		SealedFactoryRegistry:    r.FactoryRegistry.Seal(),
+		SealedSerializerRegistry: r.SerializerRegistry.Seal(),
 	}
 }
 
@@ -93,6 +96,7 @@ func (r *Registry) Seal() *SealedRegistry {
 type SealedRegistry struct {
 	*SealedDispatchRegistry
 	*SealedFactoryRegistry
+	*SealedSerializerRegistry
 }
 
 func call(typ reflect.Type, ctx context.Context, v any, h map[reflect.Type]handlerFuncAny) error {
