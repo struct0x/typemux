@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/struct0x/typemux"
+	"fmt"
 )
 
 // Event types
@@ -39,6 +37,22 @@ func main() {
 
 	// Register codecs (both factory and serializer) plus dispatch handler for each event type
 	typemux.RegisterCodec(reg, "user_created", typemux.JSONCodec[UserCreated]())
+	typemux.RegisterCodec(reg, "user_created", typemux.Codec[map[string]any, UserCreated]{
+		Unmarshal: func(data map[string]any) (UserCreated, error) {
+			return UserCreated{
+				ID:    data["id"].(string),
+				Name:  data["name"].(string),
+				Email: data["email"].(string),
+			}, nil
+		},
+		Marshal: func(event UserCreated) (map[string]any, error) {
+			return map[string]any{
+				"id":    event.ID,
+				"name":  event.Name,
+				"email": event.Email,
+			}, nil
+		},
+	})
 	typemux.RegisterDispatch(reg, h.handleUserCreated)
 
 	typemux.RegisterCodec(reg, "order_placed", typemux.JSONCodec[OrderPlaced]())
@@ -51,60 +65,63 @@ func main() {
 	sealed := reg.Seal()
 
 	// Demonstrate Serialize: emit an event back out as (name, []byte)
-	name, payload, err := typemux.Serialize[string, []byte](sealed, UserCreated{
+	name, payload, err := typemux.Serialize[string, map[string]any](sealed, UserCreated{
 		ID:    "u1",
 		Name:  "Alice",
 		Email: "alice@example.com",
 	})
-	if err != nil {
-		log.Fatalf("Serialize failed: %v", err)
-	}
-	envelope, _ := json.Marshal(struct {
-		Type string          `json:"type"`
-		Data json.RawMessage `json:"data"`
-	}{Type: name, Data: payload})
-	log.Printf("Emitted envelope: %s", envelope)
 
-	// Create HTTP handler
-	http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	fmt.Println(name, payload, err)
 
-		// Parse envelope
-		var envelope struct {
-			Type string          `json:"type"`
-			Data json.RawMessage `json:"data"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
-			http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
-			return
-		}
-
-		// Create typed value from envelope
-		value, err := typemux.CreateType(sealed, envelope.Type, []byte(envelope.Data))
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Unknown event type: %s", envelope.Type), http.StatusBadRequest)
-			return
-		}
-
-		// Dispatch to handler with generic middleware (logging, timing)
-		ctx := r.Context()
-		if err := typemux.Dispatch(sealed, ctx, value, loggingMiddleware(), timingMiddleware); err != nil {
-			http.Error(w, fmt.Sprintf("Handler error: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "Event %s processed successfully\n", envelope.Type)
-	})
-
-	// Start server
-	addr := ":8080"
-	log.Printf("Starting server on %s", addr)
-	log.Printf("Try: curl -X POST http://localhost%s/events -d '{\"type\":\"user_created\",\"data\":{\"id\":\"u1\",\"name\":\"Alice\",\"email\":\"alice@example.com\"}}'", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	// if err != nil {
+	// 	log.Fatalf("Serialize failed: %v", err)
+	// }
+	// envelope, _ := json.Marshal(struct {
+	// 	Type string          `json:"type"`
+	// 	Data json.RawMessage `json:"data"`
+	// }{Type: name, Data: payload})
+	// log.Printf("Emitted envelope: %s", envelope)
+	//
+	// // Create HTTP handler
+	// http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+	// 	if r.Method != http.MethodPost {
+	// 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	// 		return
+	// 	}
+	//
+	// 	// Parse envelope
+	// 	var envelope struct {
+	// 		Type string          `json:"type"`
+	// 		Data json.RawMessage `json:"data"`
+	// 	}
+	// 	if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
+	// 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+	// 		return
+	// 	}
+	//
+	// 	// Create typed value from envelope
+	// 	value, err := typemux.CreateType(sealed, envelope.Type, []byte(envelope.Data))
+	// 	if err != nil {
+	// 		http.Error(w, fmt.Sprintf("Unknown event type: %s", envelope.Type), http.StatusBadRequest)
+	// 		return
+	// 	}
+	//
+	// 	// Dispatch to handler with generic middleware (logging, timing)
+	// 	ctx := r.Context()
+	// 	if err := typemux.Dispatch(sealed, ctx, value, loggingMiddleware(), timingMiddleware); err != nil {
+	// 		http.Error(w, fmt.Sprintf("Handler error: %v", err), http.StatusInternalServerError)
+	// 		return
+	// 	}
+	//
+	// 	w.WriteHeader(http.StatusOK)
+	// 	_, _ = fmt.Fprintf(w, "Event %s processed successfully\n", envelope.Type)
+	// })
+	//
+	// // Start server
+	// addr := ":8080"
+	// log.Printf("Starting server on %s", addr)
+	// log.Printf("Try: curl -X POST http://localhost%s/events -d '{\"type\":\"user_created\",\"data\":{\"id\":\"u1\",\"name\":\"Alice\",\"email\":\"alice@example.com\"}}'", addr)
+	// log.Fatal(http.ListenAndServe(addr, nil))
 }
 
 type Handler struct {

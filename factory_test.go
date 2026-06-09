@@ -18,13 +18,19 @@ type OrderPlaced struct {
 	Amount  int    `json:"amount"`
 }
 
-func TestFactory_Create(t *testing.T) {
-	reg := typemux.NewFactoryRegistry()
+// readOnly[DATA, T] is a helper that builds a Codec with Serialize=Unsupported.
+// Most factory tests only exercise the unmarshal/read side.
+func readOnly[DATA, T any](unmarshal func(DATA) (T, error)) typemux.Codec[DATA, T] {
+	return typemux.NewCodec(typemux.Unsupported[T, DATA], unmarshal)
+}
 
-	typemux.RegisterFactory(reg, "user_created", func(data []byte) (UserCreated, error) {
+func TestFactory_Create(t *testing.T) {
+	reg := typemux.NewRegistry()
+
+	typemux.RegisterCodec(reg, "user_created", readOnly(func(data []byte) (UserCreated, error) {
 		var e UserCreated
 		return e, json.Unmarshal(data, &e)
-	})
+	}))
 
 	data := []byte(`{"id": "123", "name": "John"}`)
 
@@ -64,7 +70,7 @@ func TestFactory_Create(t *testing.T) {
 }
 
 func TestFactoryNotFound(t *testing.T) {
-	reg := typemux.NewFactoryRegistry()
+	reg := typemux.NewRegistry()
 
 	_, err := typemux.CreateType(reg, "unknown", []byte{})
 	if err == nil {
@@ -79,13 +85,12 @@ func TestFactoryNotFound(t *testing.T) {
 func TestFactoryReplacesExisting(t *testing.T) {
 	reg := typemux.NewRegistry()
 
-	typemux.RegisterFactory(reg, "event", func(data []byte) (UserCreated, error) {
+	typemux.RegisterCodec(reg, "event", readOnly(func(data []byte) (UserCreated, error) {
 		return UserCreated{ID: "first"}, nil
-	})
-
-	typemux.RegisterFactory(reg, "event", func(data []byte) (UserCreated, error) {
+	}))
+	typemux.RegisterCodec(reg, "event", readOnly(func(data []byte) (UserCreated, error) {
 		return UserCreated{ID: "second"}, nil
-	})
+	}))
 
 	sealed := reg.Seal()
 
@@ -103,15 +108,12 @@ func TestFactoryReplacesExisting(t *testing.T) {
 func TestFactoryDifferentKeyTypes(t *testing.T) {
 	reg := typemux.NewRegistry()
 
-	// String key
-	typemux.RegisterFactory(reg, "string_key", func(data []byte) (UserCreated, error) {
+	typemux.RegisterCodec(reg, "string_key", readOnly(func(data []byte) (UserCreated, error) {
 		return UserCreated{ID: "from_string"}, nil
-	})
-
-	// Int key
-	typemux.RegisterFactory(reg, 42, func(data []byte) (OrderPlaced, error) {
+	}))
+	typemux.RegisterCodec(reg, 42, readOnly(func(data []byte) (OrderPlaced, error) {
 		return OrderPlaced{OrderID: "from_int"}, nil
-	})
+	}))
 
 	sealed := reg.Seal()
 
@@ -135,10 +137,10 @@ func TestFactoryDifferentKeyTypes(t *testing.T) {
 func TestFactoryWrongDataType(t *testing.T) {
 	reg := typemux.NewRegistry()
 
-	typemux.RegisterFactory(reg, "user", func(data []byte) (UserCreated, error) {
+	typemux.RegisterCodec(reg, "user", readOnly(func(data []byte) (UserCreated, error) {
 		var e UserCreated
 		return e, json.Unmarshal(data, &e)
-	})
+	}))
 
 	sealed := reg.Seal()
 
@@ -152,47 +154,97 @@ func TestFactoryWrongDataType(t *testing.T) {
 	}
 }
 
-func TestJSONFactory(t *testing.T) {
+func TestFactoryMultipleDataTypesPerKey(t *testing.T) {
 	reg := typemux.NewRegistry()
 
-	// Use JSONFactory helper instead of manual unmarshaling
-	typemux.RegisterFactory(reg, "user_created", typemux.JSONFactory[*UserCreated]())
-	typemux.RegisterFactory(reg, "order_placed", typemux.JSONFactory[*OrderPlaced]())
+	typemux.RegisterCodec(reg, "user", readOnly(func(data []byte) (UserCreated, error) {
+		var v UserCreated
+		return v, json.Unmarshal(data, &v)
+	}))
+	typemux.RegisterCodec(reg, "user", readOnly(func(data map[string]any) (UserCreated, error) {
+		return UserCreated{
+			ID:   data["id"].(string),
+			Name: data["name"].(string),
+		}, nil
+	}))
 
 	sealed := reg.Seal()
 
-	// Test UserCreated
-	userData := []byte(`{"id": "u1", "name": "Alice"}`)
-	result, err := typemux.CreateType(sealed, "user_created", userData)
+	bytesResult, err := typemux.CreateType(sealed, "user", []byte(`{"id":"b1","name":"FromBytes"}`))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("bytes path: %v", err)
+	}
+	if got := bytesResult.(UserCreated); got.ID != "b1" || got.Name != "FromBytes" {
+		t.Errorf("bytes path: %+v", got)
 	}
 
-	user := result.(*UserCreated)
-	if user.ID != "u1" || user.Name != "Alice" {
-		t.Errorf("unexpected user: %+v", user)
-	}
-
-	// Test OrderPlaced
-	orderData := []byte(`{"order_id": "o1", "amount": 100}`)
-	result, err = typemux.CreateType(sealed, "order_placed", orderData)
+	mapResult, err := typemux.CreateType(sealed, "user", map[string]any{"id": "m1", "name": "FromMap"})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("map path: %v", err)
+	}
+	if got := mapResult.(UserCreated); got.ID != "m1" || got.Name != "FromMap" {
+		t.Errorf("map path: %+v", got)
 	}
 
-	order := result.(*OrderPlaced)
-	if order.OrderID != "o1" || order.Amount != 100 {
-		t.Errorf("unexpected order: %+v", order)
+	// Unregistered DATA type returns ErrDataTypeNotSupported (key is known).
+	_, err = typemux.CreateType(sealed, "user", "raw string")
+	if err == nil {
+		t.Fatal("expected error for unregistered DATA type")
+	}
+	if !errors.Is(err, typemux.ErrDataTypeNotSupported) {
+		t.Errorf("expected ErrDataTypeNotSupported, got %v", err)
+	}
+
+	// Unknown key returns ErrFactoryNotFound.
+	_, err = typemux.CreateType(sealed, "unknown", []byte("{}"))
+	if !errors.Is(err, typemux.ErrFactoryNotFound) {
+		t.Errorf("expected ErrFactoryNotFound, got %v", err)
 	}
 }
 
-func TestJSONFactory_InvalidJSON(t *testing.T) {
+func TestUnsupportedMarshal_CreateTypeUnaffected(t *testing.T) {
 	reg := typemux.NewRegistry()
-	typemux.RegisterFactory(reg, "user", typemux.JSONFactory[UserCreated]())
+	typemux.RegisterCodec(reg, "user", readOnly(func(data []byte) (UserCreated, error) {
+		return UserCreated{ID: "via-unmarshal"}, nil
+	}))
 	sealed := reg.Seal()
 
-	_, err := typemux.CreateType(sealed, "user", []byte(`{invalid json}`))
-	if err == nil {
-		t.Fatal("expected error for invalid JSON, got nil")
+	// Read side still works.
+	got, err := typemux.CreateType(sealed, "user", []byte{})
+	if err != nil {
+		t.Fatalf("CreateType: %v", err)
+	}
+	if got.(UserCreated).ID != "via-unmarshal" {
+		t.Errorf("got %+v", got)
+	}
+
+	// Write side returns ErrUnsupported.
+	_, _, err = typemux.Serialize[string, []byte](sealed, UserCreated{ID: "u1"})
+	if !errors.Is(err, typemux.ErrUnsupported) {
+		t.Errorf("expected ErrUnsupported, got %v", err)
+	}
+}
+
+func TestUnsupportedUnmarshal_MarshalUnaffected(t *testing.T) {
+	reg := typemux.NewRegistry()
+	typemux.RegisterCodec(reg, "user", typemux.NewCodec(
+		func(u UserCreated) ([]byte, error) { return []byte(u.ID), nil },
+		typemux.Unsupported[[]byte, UserCreated],
+	))
+	sealed := reg.Seal()
+
+	// Write side still works.
+	name, data, err := typemux.Serialize[string, []byte](sealed, UserCreated{ID: "u1"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if name != "user" || string(data) != "u1" {
+		t.Errorf("name=%q data=%q", name, data)
+	}
+
+	// Read side returns ErrUnsupported.
+	_, err = typemux.CreateType(sealed, "user", []byte("anything"))
+	if !errors.Is(err, typemux.ErrUnsupported) {
+		t.Errorf("expected ErrUnsupported, got %v", err)
 	}
 }

@@ -63,20 +63,24 @@ func (s *SealedDispatchRegistry) call(typ reflect.Type, ctx context.Context, v a
 	return call(typ, ctx, v, s.h)
 }
 
-// Registry is a composite registry that supports handlers, factories, and serializers.
-// Use NewRegistry() to create one.
+// Registry is a composite registry that combines dispatch handlers and codecs.
+//
+// The codec half is heterogeneous over DATA — a single Registry can hold
+// codecs producing/consuming different DATA types simultaneously. The DATA
+// type is chosen at each Serialize / CreateType call site.
+//
+// Use NewRegistry() to create one; register codecs with RegisterCodec and
+// handlers with RegisterDispatch.
 type Registry struct {
 	*DispatchRegistry
-	*FactoryRegistry
-	*SerializerRegistry
+	*CodecRegistry
 }
 
-// NewRegistry creates a new composite Registry with handler, factory, and serializer support.
+// NewRegistry creates a new composite Registry with handler + codec support.
 func NewRegistry() *Registry {
 	return &Registry{
-		DispatchRegistry:   NewDispatchRegistry(),
-		FactoryRegistry:    NewFactoryRegistry(),
-		SerializerRegistry: NewSerializerRegistry(),
+		DispatchRegistry: NewDispatchRegistry(),
+		CodecRegistry:    NewCodecRegistry(),
 	}
 }
 
@@ -86,17 +90,15 @@ func NewRegistry() *Registry {
 // with no mutex overhead.
 func (r *Registry) Seal() *SealedRegistry {
 	return &SealedRegistry{
-		SealedDispatchRegistry:   r.DispatchRegistry.Seal(),
-		SealedFactoryRegistry:    r.FactoryRegistry.Seal(),
-		SealedSerializerRegistry: r.SerializerRegistry.Seal(),
+		SealedDispatchRegistry: r.DispatchRegistry.Seal(),
+		SealedCodecRegistry:    r.CodecRegistry.Seal(),
 	}
 }
 
 // SealedRegistry is an immutable composite registry for runtime use.
 type SealedRegistry struct {
 	*SealedDispatchRegistry
-	*SealedFactoryRegistry
-	*SealedSerializerRegistry
+	*SealedCodecRegistry
 }
 
 func call(typ reflect.Type, ctx context.Context, v any, h map[reflect.Type]handlerFuncAny) error {

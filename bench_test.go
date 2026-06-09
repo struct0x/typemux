@@ -22,9 +22,10 @@ var (
 var u64Sink uint64
 
 func init() {
-	typemux.RegisterFactory(regBench, "foo", func(data string) (Foo, error) {
-		return Foo{Name: data}, nil
-	})
+	typemux.RegisterCodec(regBench, "foo", typemux.NewCodec(
+		typemux.Unsupported[Foo, string],
+		func(data string) (Foo, error) { return Foo{Name: data}, nil },
+	))
 
 	typemux.RegisterDispatch[Foo](regBench, func(ctx context.Context, foo Foo) error {
 		atomic.AddUint64(&u64Sink, uint64(1))

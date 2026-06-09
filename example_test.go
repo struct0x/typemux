@@ -116,9 +116,9 @@ func ExampleCreateType() {
 	// Create registry and register factories + handlers
 	reg := typemux.NewRegistry()
 
-	// Register factories using JSONFactory helper
-	typemux.RegisterFactory(reg, "user_created", typemux.JSONFactory[UserCreated]())
-	typemux.RegisterFactory(reg, "order_placed", typemux.JSONFactory[OrderPlaced]())
+	// Register JSON codecs (factory + serializer in one call)
+	typemux.RegisterCodec(reg, "user_created", typemux.JSONCodec[UserCreated]())
+	typemux.RegisterCodec(reg, "order_placed", typemux.JSONCodec[OrderPlaced]())
 
 	// Register handlers
 	typemux.RegisterDispatch(reg, func(ctx context.Context, e UserCreated) error {

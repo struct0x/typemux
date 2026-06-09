@@ -181,3 +181,76 @@ func TestRegisterCodec_ReplacesExisting(t *testing.T) {
 		t.Errorf("expected second unmarshaler to be used, got ID=%s", got.(UserCreated).ID)
 	}
 }
+
+func TestSerialize_MultipleDataTypesPerType(t *testing.T) {
+	reg := typemux.NewRegistry()
+
+	typemux.RegisterCodec(reg, "user", typemux.JSONCodec[UserCreated]())
+	typemux.RegisterCodec(reg, "user", typemux.Codec[map[string]any, UserCreated]{
+		Marshal: func(u UserCreated) (map[string]any, error) {
+			return map[string]any{"id": u.ID, "name": u.Name}, nil
+		},
+		Unmarshal: func(m map[string]any) (UserCreated, error) {
+			return UserCreated{ID: m["id"].(string), Name: m["name"].(string)}, nil
+		},
+	})
+
+	sealed := reg.Seal()
+	value := UserCreated{ID: "u1", Name: "Alice"}
+
+	// []byte path
+	name, bytes, err := typemux.Serialize[string, []byte](sealed, value)
+	if err != nil {
+		t.Fatalf("bytes path: %v", err)
+	}
+	if name != "user" {
+		t.Errorf("bytes path name: %s", name)
+	}
+	if len(bytes) == 0 {
+		t.Error("bytes path: empty output")
+	}
+
+	// map[string]any path
+	name, m, err := typemux.Serialize[string, map[string]any](sealed, value)
+	if err != nil {
+		t.Fatalf("map path: %v", err)
+	}
+	if name != "user" {
+		t.Errorf("map path name: %s", name)
+	}
+	if m["id"] != "u1" || m["name"] != "Alice" {
+		t.Errorf("map path payload: %+v", m)
+	}
+
+	// Round-trip both ways through CreateType.
+	bytesBack, err := typemux.CreateType(sealed, "user", bytes)
+	if err != nil {
+		t.Fatalf("CreateType bytes: %v", err)
+	}
+	if bytesBack.(UserCreated) != value {
+		t.Errorf("bytes round-trip: got %+v want %+v", bytesBack, value)
+	}
+
+	mapBack, err := typemux.CreateType(sealed, "user", m)
+	if err != nil {
+		t.Fatalf("CreateType map: %v", err)
+	}
+	if mapBack.(UserCreated) != value {
+		t.Errorf("map round-trip: got %+v want %+v", mapBack, value)
+	}
+}
+
+func TestSerialize_DataTypeMismatch(t *testing.T) {
+	reg := typemux.NewRegistry()
+	typemux.RegisterCodec(reg, "user", typemux.JSONCodec[UserCreated]())
+	sealed := reg.Seal()
+
+	// Type is registered, but only for []byte. Asking for map[string]any → ErrDataTypeMismatch.
+	_, _, err := typemux.Serialize[string, map[string]any](sealed, UserCreated{ID: "u1"})
+	if err == nil {
+		t.Fatal("expected error for unregistered DATA type")
+	}
+	if !errors.Is(err, typemux.ErrDataTypeMismatch) {
+		t.Errorf("expected ErrDataTypeMismatch, got %v", err)
+	}
+}
