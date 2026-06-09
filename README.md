@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/struct0x/typemux.svg)](https://pkg.go.dev/github.com/struct0x/typemux)
 [![Go Report Card](https://goreportcard.com/badge/github.com/struct0x/typemux)](https://goreportcard.com/report/github.com/struct0x/typemux)
-![Coverage](https://img.shields.io/badge/Coverage-58.9%25-yellow)
+![Coverage](https://img.shields.io/badge/Coverage-93.8%25-brightgreen)
 
 ## Overview
 
